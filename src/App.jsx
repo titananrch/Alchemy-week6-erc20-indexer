@@ -8,7 +8,7 @@ import {
   Input,
   SimpleGrid,
   Text,
-  Spinner
+  Spinner,
 } from "@chakra-ui/react";
 import { Alchemy, Network, Utils } from "alchemy-sdk";
 import { useState } from "react";
@@ -20,9 +20,30 @@ function App() {
   const [tokenDataObjects, setTokenDataObjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [walletAddress, setWalletAddress] = useState("");
+
+  async function connectWallet() {
+    try {
+      if (!window.ethereum) {
+        setError("MetaMask not found. Please install MetaMask.");
+        return;
+      }
+
+      const accounts = await window.ethereum.request({
+        method: "eth_requestAccounts",
+      });
+
+      setWalletAddress(accounts[0]);
+      setUserAddress(accounts[0]); // autofill input
+      setError("");
+    } catch (err) {
+      setError("Failed to connect wallet.");
+    }
+  }
 
   async function getTokenBalance() {
     setError("");
+
     try {
       setLoading(true);
       setHasQueried(false);
@@ -33,8 +54,27 @@ function App() {
       };
 
       const alchemy = new Alchemy(config);
-      const data = await alchemy.core.getTokenBalances(userAddress);
 
+      let resolvedAddress = userAddress;
+      if (userAddress.includes(".")) {
+        try {
+          const lookup = await alchemy.core.resolveName(userAddress);
+
+          if (!lookup) {
+            setError("ENS name not found.");
+            setLoading(false);
+            return;
+          }
+
+          resolvedAddress = lookup;
+        } catch (err) {
+          setError("Failed to resolve ENS name.");
+          setLoading(false);
+          return;
+        }
+      }
+
+      const data = await alchemy.core.getTokenBalances(resolvedAddress);
       setResults(data);
 
       const tokenDataPromises = data.tokenBalances.map((token) =>
@@ -42,6 +82,7 @@ function App() {
       );
 
       setTokenDataObjects(await Promise.all(tokenDataPromises));
+
       setHasQueried(true);
     } catch (err) {
       setError("Something went wrong while fetching token balances.");
@@ -76,6 +117,26 @@ function App() {
         <Heading mt={42}>
           Get all the ERC-20 token balances of this address:
         </Heading>
+        <Flex mt={4} gap={4} align="center">
+          <Button onClick={connectWallet} bg="purple.500" color="white">
+            {walletAddress ? "Wallet Connected" : "Connect Wallet"}
+          </Button>
+
+          {walletAddress && (
+            <Box
+              bg="purple.700"
+              color="white"
+              px={3}
+              py={1}
+              borderRadius="md"
+              fontSize="sm"
+            >
+              {walletAddress.substring(0, 6)}...
+              {walletAddress.substring(walletAddress.length - 4)}
+            </Box>
+          )}
+        </Flex>
+
         <Input
           onChange={(e) => setUserAddress(e.target.value)}
           color="black"
