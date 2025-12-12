@@ -8,46 +8,55 @@ import {
   Input,
   SimpleGrid,
   Text,
-} from '@chakra-ui/react';
-import { Alchemy, Network, Utils } from 'alchemy-sdk';
-import { useState } from 'react';
+  Spinner
+} from "@chakra-ui/react";
+import { Alchemy, Network, Utils } from "alchemy-sdk";
+import { useState } from "react";
 
 function App() {
-  const [userAddress, setUserAddress] = useState('');
+  const [userAddress, setUserAddress] = useState("");
   const [results, setResults] = useState([]);
   const [hasQueried, setHasQueried] = useState(false);
   const [tokenDataObjects, setTokenDataObjects] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   async function getTokenBalance() {
-    const config = {
-      apiKey: '<-- COPY-PASTE YOUR ALCHEMY API KEY HERE -->',
-      network: Network.ETH_MAINNET,
-    };
+    setError("");
+    try {
+      setLoading(true);
+      setHasQueried(false);
 
-    const alchemy = new Alchemy(config);
-    const data = await alchemy.core.getTokenBalances(userAddress);
+      const config = {
+        apiKey: import.meta.env.VITE_ALCHEMY_API_KEY,
+        network: Network.ETH_MAINNET,
+      };
 
-    setResults(data);
+      const alchemy = new Alchemy(config);
+      const data = await alchemy.core.getTokenBalances(userAddress);
 
-    const tokenDataPromises = [];
+      setResults(data);
 
-    for (let i = 0; i < data.tokenBalances.length; i++) {
-      const tokenData = alchemy.core.getTokenMetadata(
-        data.tokenBalances[i].contractAddress
+      const tokenDataPromises = data.tokenBalances.map((token) =>
+        alchemy.core.getTokenMetadata(token.contractAddress)
       );
-      tokenDataPromises.push(tokenData);
-    }
 
-    setTokenDataObjects(await Promise.all(tokenDataPromises));
-    setHasQueried(true);
+      setTokenDataObjects(await Promise.all(tokenDataPromises));
+      setHasQueried(true);
+    } catch (err) {
+      setError("Something went wrong while fetching token balances.");
+    } finally {
+      setLoading(false);
+    }
   }
+
   return (
     <Box w="100vw">
       <Center>
         <Flex
-          alignItems={'center'}
+          alignItems={"center"}
           justifyContent="center"
-          flexDirection={'column'}
+          flexDirection={"column"}
         >
           <Heading mb={0} fontSize={36}>
             ERC-20 Token Indexer
@@ -62,7 +71,7 @@ function App() {
         w="100%"
         flexDirection="column"
         alignItems="center"
-        justifyContent={'center'}
+        justifyContent={"center"}
       >
         <Heading mt={42}>
           Get all the ERC-20 token balances of this address:
@@ -76,40 +85,81 @@ function App() {
           bgColor="white"
           fontSize={24}
         />
-        <Button fontSize={20} onClick={getTokenBalance} mt={36} bgColor="blue">
+        <Button
+          fontSize={20}
+          onClick={getTokenBalance}
+          mt={36}
+          bgColor="blue"
+          isLoading={loading}
+          loadingText="Fetching"
+          isDisabled={loading || !userAddress}
+        >
           Check ERC-20 Token Balances
         </Button>
 
         <Heading my={36}>ERC-20 token balances:</Heading>
 
-        {hasQueried ? (
-          <SimpleGrid w={'90vw'} columns={4} spacing={24}>
-            {results.tokenBalances.map((e, i) => {
-              return (
-                <Flex
-                  flexDir={'column'}
-                  color="white"
-                  bg="blue"
-                  w={'20vw'}
-                  key={e.id}
-                >
-                  <Box>
-                    <b>Symbol:</b> ${tokenDataObjects[i].symbol}&nbsp;
-                  </Box>
-                  <Box>
-                    <b>Balance:</b>&nbsp;
-                    {Utils.formatUnits(
-                      e.tokenBalance,
-                      tokenDataObjects[i].decimals
-                    )}
-                  </Box>
-                  <Image src={tokenDataObjects[i].logo} />
-                </Flex>
-              );
-            })}
+        {error && (
+          <Box
+            bg="red.500"
+            color="white"
+            px={4}
+            py={2}
+            borderRadius="md"
+            mb={4}
+          >
+            {error}
+          </Box>
+        )}
+
+        {loading && (
+          <Center mt={8}>
+            <Flex direction="column" align="center" gap={4}>
+              <Spinner size="xl" />
+              <Text>Fetching token balances...</Text>
+            </Flex>
+          </Center>
+        )}
+
+        {!loading && !hasQueried && !error && (
+          <Center mt={8}>
+            <Text opacity={0.7}>
+              Enter an address and click the button above.
+            </Text>
+          </Center>
+        )}
+
+        {!loading && hasQueried && (
+          <SimpleGrid w={"90vw"} columns={[1, 2, 3, 4]} spacing={8}>
+            {results.tokenBalances.map((e, i) => (
+              <Flex
+                key={i}
+                direction="column"
+                bg="blue.600"
+                color="white"
+                p={4}
+                borderRadius="lg"
+                shadow="md"
+              >
+                <Text>
+                  <b>Symbol:</b> {tokenDataObjects[i].symbol}
+                </Text>
+                <Text>
+                  <b>Balance:</b>{" "}
+                  {Utils.formatUnits(
+                    e.tokenBalance,
+                    tokenDataObjects[i].decimals
+                  )}
+                </Text>
+                <Image
+                  mt={2}
+                  src={tokenDataObjects[i].logo}
+                  maxW="40px"
+                  alt="token-logo"
+                />
+              </Flex>
+            ))}
           </SimpleGrid>
-        ) : (
-          'Please make a query! This may take a few seconds...'
         )}
       </Flex>
     </Box>
