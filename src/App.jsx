@@ -9,6 +9,8 @@ import {
   SimpleGrid,
   Text,
   Spinner,
+  VStack,
+  HStack,
 } from "@chakra-ui/react";
 import { Alchemy, Network, Utils } from "alchemy-sdk";
 import { useState } from "react";
@@ -21,6 +23,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [walletAddress, setWalletAddress] = useState("");
+  const [activeAddress, setActiveAddress] = useState("");
+  const [tokenMetadataCache, setTokenMetadataCache] = useState({});
+  const [sortBy, setSortBy] = useState("symbol");
 
   async function connectWallet() {
     try {
@@ -33,15 +38,22 @@ function App() {
         method: "eth_requestAccounts",
       });
 
-      setWalletAddress(accounts[0]);
-      setUserAddress(accounts[0]); // autofill input
-      setError("");
-    } catch (err) {
+      const address = accounts[0];
+
+      setWalletAddress(address);
+      setUserAddress(address);
+
+      await fetchBalances(address);
+    } catch {
       setError("Failed to connect wallet.");
     }
   }
 
-  async function getTokenBalance() {
+  function disconnectWallet() {
+    setWalletAddress("");
+  }
+
+  async function fetchBalances(address) {
     setError("");
 
     try {
@@ -55,33 +67,63 @@ function App() {
 
       const alchemy = new Alchemy(config);
 
-      let resolvedAddress = userAddress;
-      if (userAddress.includes(".")) {
-        try {
-          const lookup = await alchemy.core.resolveName(userAddress);
+      let resolvedAddress = address;
 
-          if (!lookup) {
-            setError("ENS name not found.");
-            setLoading(false);
-            return;
-          }
+      // ENS resolution
+      if (address.includes(".")) {
+        const lookup = await alchemy.core.resolveName(address);
 
-          resolvedAddress = lookup;
-        } catch (err) {
-          setError("Failed to resolve ENS name.");
+        if (!lookup) {
+          setError("ENS name not found.");
           setLoading(false);
           return;
         }
+
+        resolvedAddress = lookup;
       }
+
+      setActiveAddress(resolvedAddress);
 
       const data = await alchemy.core.getTokenBalances(resolvedAddress);
       setResults(data);
 
-      const tokenDataPromises = data.tokenBalances.map((token) =>
-        alchemy.core.getTokenMetadata(token.contractAddress)
+      const newMetadata = {};
+      const metadataPromises = [];
+
+      data.tokenBalances.forEach((token) => {
+        const address = token.contractAddress;
+
+        if (!tokenMetadataCache[address]) {
+          metadataPromises.push(
+            alchemy.core.getTokenMetadata(address).then((meta) => ({
+              status: "fulfilled",
+              address,
+              meta,
+            }))
+          );
+        }
+      });
+
+      const settled = await Promise.allSettled(metadataPromises);
+
+      settled.forEach((result) => {
+        if (result.status === "fulfilled" && result.value?.meta) {
+          newMetadata[result.value.address] = result.value.meta;
+        }
+      });
+
+      setTokenMetadataCache((prev) => ({
+        ...prev,
+        ...newMetadata,
+      }));
+
+      const mergedMetadata = data.tokenBalances.map(
+        (token) =>
+          newMetadata[token.contractAddress] ||
+          tokenMetadataCache[token.contractAddress]
       );
 
-      setTokenDataObjects(await Promise.all(tokenDataPromises));
+      setTokenDataObjects(mergedMetadata);
 
       setHasQueried(true);
     } catch (err) {
@@ -90,139 +132,208 @@ function App() {
       setLoading(false);
     }
   }
+  const sortedTokenBalances = hasQueried
+    ? [...results.tokenBalances].sort((a, b) => {
+        const metaA = tokenDataObjects[results.tokenBalances.indexOf(a)];
+        const metaB = tokenDataObjects[results.tokenBalances.indexOf(b)];
+
+        if (!metaA || !metaB) return 0;
+
+        if (sortBy === "symbol") {
+          return (metaA.symbol || "").localeCompare(metaB.symbol || "");
+        }
+
+        if (sortBy === "balance") {
+          const balA = Number(
+            Utils.formatUnits(a.tokenBalance, metaA.decimals)
+          );
+          const balB = Number(
+            Utils.formatUnits(b.tokenBalance, metaB.decimals)
+          );
+          return balB - balA;
+        }
+
+        return 0;
+      })
+    : [];
 
   return (
-    <Box w="100vw">
-      <Center>
-        <Flex
-          alignItems={"center"}
-          justifyContent="center"
-          flexDirection={"column"}
-        >
-          <Heading mb={0} fontSize={36}>
-            ERC-20 Token Indexer
-          </Heading>
-          <Text>
-            Plug in an address and this website will return all of its ERC-20
-            token balances!
-          </Text>
-        </Flex>
-      </Center>
-      <Flex
-        w="100%"
-        flexDirection="column"
-        alignItems="center"
-        justifyContent={"center"}
-      >
-        <Heading mt={42}>
-          Get all the ERC-20 token balances of this address:
-        </Heading>
-        <Flex mt={4} gap={4} align="center">
-          <Button onClick={connectWallet} bg="purple.500" color="white">
-            {walletAddress ? "Wallet Connected" : "Connect Wallet"}
-          </Button>
+    <Box minH="100vh" bg="gray.50">
+      <Box maxW="1200px" mx="auto" px={6} py={10}>
+        {/* Header */}
+        <Center mb={10}>
+          <Flex direction="column" align="center" gap={2}>
+            <Heading size="xl">ERC-20 Token Indexer</Heading>
+            <Text color="gray.600" textAlign="center">
+              View ERC-20 token balances for any wallet or your connected
+              wallet.
+            </Text>
+          </Flex>
+        </Center>
 
-          {walletAddress && (
-            <Box
-              bg="purple.700"
-              color="white"
-              px={3}
-              py={1}
-              borderRadius="md"
-              fontSize="sm"
-            >
-              {walletAddress.substring(0, 6)}...
-              {walletAddress.substring(walletAddress.length - 4)}
-            </Box>
-          )}
-        </Flex>
+        {/* Wallet Card */}
+        <Box borderRadius="xl" borderWidth="1px" borderColor="red.400" mb={8}>
+          <VStack>
+            <Text fontWeight="medium" mb={4}>
+              Want to quickly see your own balances?
+            </Text>
 
-        <Input
-          onChange={(e) => setUserAddress(e.target.value)}
-          color="black"
-          w="600px"
-          textAlign="center"
-          p={4}
-          bgColor="white"
-          fontSize={24}
-        />
-        <Button
-          fontSize={20}
-          onClick={getTokenBalance}
-          mt={36}
-          bgColor="blue"
-          isLoading={loading}
-          loadingText="Fetching"
-          isDisabled={loading || !userAddress}
-        >
-          Check ERC-20 Token Balances
-        </Button>
+            <Flex justify="space-between" align="center" wrap="wrap" gap={4}>
+              {!walletAddress ? (
+                <Button onClick={connectWallet}>Connect Wallet</Button>
+              ) : (
+                <VStack>
+                  <Box
+                    bg="purple.100"
+                    color="purple.700"
+                    px={3}
+                    py={1}
+                    borderRadius="md"
+                    fontSize="sm"
+                    fontWeight="medium"
+                  >
+                    Connected: {walletAddress.slice(0, 6)}...
+                    {walletAddress.slice(-4)}
+                  </Box>
+                  <HStack>
+                    <Button onClick={disconnectWallet}>Disconnect</Button>
 
-        <Heading my={36}>ERC-20 token balances:</Heading>
+                    <Button onClick={() => fetchBalances(walletAddress)}>
+                      View Wallet
+                    </Button>
+                  </HStack>
+                </VStack>
+              )}
+            </Flex>
 
+            {activeAddress && (
+              <Text mt={4} fontSize="sm" color="gray.600">
+                Viewing balances for{" "}
+                <b>
+                  {activeAddress.slice(0, 6)}...
+                  {activeAddress.slice(-4)}
+                </b>
+              </Text>
+            )}
+          </VStack>
+        </Box>
+
+        {/* Address Input */}
+        <Box borderRadius="xl" p={6} shadow="sm" mb={8}>
+          <Flex direction="column" gap={4}>
+            <Center>
+              <Input
+                value={userAddress}
+                onChange={(e) => setUserAddress(e.target.value)}
+                placeholder="Enter wallet address or ENS (e.g. vitalik.eth)"
+                size="xl"
+                variant="outline"
+              />
+            </Center>
+            <Center>
+              <Button
+                onClick={() => fetchBalances(userAddress)}
+                isLoading={loading}
+                isDisabled={loading || !userAddress}
+              >
+                Check Token Balances
+              </Button>
+            </Center>
+          </Flex>
+        </Box>
+        {hasQueried && (
+          <Flex justify="flex-end" mb={4}>
+            <Flex align="center" gap={2}>
+              <Text fontSize="sm" color="gray.600">
+                Sort by:
+              </Text>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: "6px",
+                  border: "1px solid #CBD5E0",
+                }}
+              >
+                <option value="symbol">Symbol (A–Z)</option>
+                <option value="balance">Balance (High → Low)</option>
+              </select>
+            </Flex>
+          </Flex>
+        )}
+
+        {/* Results */}
         {error && (
-          <Box
-            bg="red.500"
-            color="white"
-            px={4}
-            py={2}
-            borderRadius="md"
-            mb={4}
-          >
+          <Box bg="red.500" color="white" p={3} borderRadius="md" mb={6}>
             {error}
           </Box>
         )}
 
         {loading && (
-          <Center mt={8}>
+          <Center py={10}>
             <Flex direction="column" align="center" gap={4}>
-              <Spinner size="xl" />
-              <Text>Fetching token balances...</Text>
+              <Spinner />
+              <Text color="gray.600">Fetching token balances…</Text>
             </Flex>
           </Center>
         )}
 
-        {!loading && !hasQueried && !error && (
-          <Center mt={8}>
-            <Text opacity={0.7}>
-              Enter an address and click the button above.
-            </Text>
-          </Center>
-        )}
-
         {!loading && hasQueried && (
-          <SimpleGrid w={"90vw"} columns={[1, 2, 3, 4]} spacing={8}>
-            {results.tokenBalances.map((e, i) => (
-              <Flex
-                key={i}
-                direction="column"
-                bg="blue.600"
-                color="white"
-                p={4}
-                borderRadius="lg"
-                shadow="md"
-              >
-                <Text>
-                  <b>Symbol:</b> {tokenDataObjects[i].symbol}
-                </Text>
-                <Text>
-                  <b>Balance:</b>{" "}
-                  {Utils.formatUnits(
-                    e.tokenBalance,
-                    tokenDataObjects[i].decimals
-                  )}
-                </Text>
-                <Image
-                  mt={2}
-                  src={tokenDataObjects[i].logo}
-                  maxW="40px"
-                  alt="token-logo"
-                />
-              </Flex>
-            ))}
+          <SimpleGrid columns={[1, 2, 3, 4]} spacing={6}>
+            {sortedTokenBalances.map((e, i) => {
+              const meta = tokenDataObjects[results.tokenBalances.indexOf(e)];
+
+              if (!meta) return null;
+
+              return (
+                <Box
+                  key={e.contractAddress}
+                  p={5}
+                  borderRadius="xl"
+                  maxW="200px"
+                  borderWidth="1px"
+                  borderColor="gray.200"
+                  _hover={{ shadow: "md" }}
+                >
+                  <Flex align="center" gap={3} mb={3}>
+                    {meta.logo ? (
+                      <Image
+                        src={meta.logo}
+                        boxSize="32px"
+                        borderRadius="full"
+                      />
+                    ) : (
+                      <Flex
+                        boxSize="32px"
+                        borderRadius="full"
+                        bg="purple.500"
+                        align="center"
+                        justify="center"
+                        color="white"
+                        fontWeight="bold"
+                        fontSize="sm"
+                      >
+                        {meta.symbol?.[0] || "?"}
+                      </Flex>
+                    )}
+
+                    <Text fontWeight="bold">{meta.symbol || "Unknown"}</Text>
+                  </Flex>
+
+                  <Text fontSize="sm" color="gray.500">
+                    Balance
+                  </Text>
+
+                  <Text fontWeight="medium" isTruncated>
+                    {Utils.formatUnits(e.tokenBalance, meta.decimals)}
+                  </Text>
+                </Box>
+              );
+            })}
           </SimpleGrid>
         )}
-      </Flex>
+      </Box>
     </Box>
   );
 }
